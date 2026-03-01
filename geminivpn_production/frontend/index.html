@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GeminiVPN — Browse at Lightspeed</title>
+    <meta name="description" content="Ultra-low latency VPN with 10 Gbps servers, no-logs policy, and military-grade encryption. Stay invisible, browse at lightspeed." />
+    <meta name="keywords" content="VPN, privacy, security, fast VPN, no-logs VPN, WireGuard, anonymous browsing" />
+    <meta name="author" content="GeminiVPN" />
+    <meta name="theme-color" content="#00F0FF" />
+    <meta name="msapplication-TileColor" content="#070A12" />
+    <link rel="manifest" href="/manifest.json" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="GeminiVPN" />
+    <link rel="icon" type="image/png" href="/geminivpn-logo.png" />
+    <link rel="apple-touch-icon" href="/geminivpn-logo.png" />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://geminivpn.access.ly/" />
+    <meta property="og:title" content="GeminiVPN — Browse at Lightspeed" />
+    <meta property="og:description" content="Ultra-low latency VPN. 10 Gbps servers. No logs. Military-grade encryption." />
+    <meta property="og:image" content="/hero_city.jpg" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="GeminiVPN — Browse at Lightspeed" />
+    <meta name="twitter:description" content="Ultra-low latency VPN. 10 Gbps servers. No logs." />
+    <meta name="twitter:image" content="/hero_city.jpg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker
+            .register('/sw.js')
+            .then((reg) => console.log('[SW] Registered:', reg.scope))
+            .catch((err) => console.warn('[SW] Registration failed:', err));
+        });
+      }
+    </script>
+  </body>
+</html>
