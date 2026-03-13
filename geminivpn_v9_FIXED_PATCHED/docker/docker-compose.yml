@@ -1,0 +1,139 @@
+# GeminiVPN — Production Docker Compose (SQLite Edition)
+# Usage: docker compose -f docker/docker-compose.yml --env-file ../.env up -d
+# No external databases required — all data stored in ./database/geminivpn.db
+
+services:
+
+  backend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.backend
+    image: geminivpn-backend
+    container_name: geminivpn-backend
+    restart: unless-stopped
+    environment:
+      NODE_ENV:          production
+      PORT:              5000
+      DATABASE_URL:      file:/app/database/geminivpn.db
+      FRONTEND_URL:      ${FRONTEND_URL:-https://localhost}
+      JWT_ACCESS_SECRET:  ${JWT_ACCESS_SECRET:-change_me_access_secret_32chars}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-change_me_refresh_secret_32chars}
+      JWT_ACCESS_EXPIRY:  ${JWT_ACCESS_EXPIRY:-15m}
+      JWT_REFRESH_EXPIRY: ${JWT_REFRESH_EXPIRY:-7d}
+      # Stripe
+      STRIPE_SECRET_KEY:        ${STRIPE_SECRET_KEY:-sk_placeholder}
+      STRIPE_PUBLISHABLE_KEY:   ${STRIPE_PUBLISHABLE_KEY:-pk_placeholder}
+      STRIPE_WEBHOOK_SECRET:    ${STRIPE_WEBHOOK_SECRET:-whsec_placeholder}
+      STRIPE_MONTHLY_PRICE_ID:  ${STRIPE_MONTHLY_PRICE_ID:-price_placeholder}
+      STRIPE_YEARLY_PRICE_ID:   ${STRIPE_YEARLY_PRICE_ID:-price_placeholder}
+      STRIPE_TWO_YEAR_PRICE_ID: ${STRIPE_TWO_YEAR_PRICE_ID:-price_placeholder}
+      # Square
+      SQUARE_ENVIRONMENT:           ${SQUARE_ENVIRONMENT:-sandbox}
+      SQUARE_ACCESS_TOKEN:          ${SQUARE_ACCESS_TOKEN:-placeholder}
+      SQUARE_LOCATION_ID:           ${SQUARE_LOCATION_ID:-placeholder}
+      SQUARE_WEBHOOK_SIGNATURE_KEY: ${SQUARE_WEBHOOK_SIGNATURE_KEY:-placeholder}
+      # Paddle
+      PADDLE_ENVIRONMENT:           ${PADDLE_ENVIRONMENT:-sandbox}
+      PADDLE_API_KEY:               ${PADDLE_API_KEY:-placeholder}
+      PADDLE_WEBHOOK_SECRET:        ${PADDLE_WEBHOOK_SECRET:-placeholder}
+      PADDLE_MONTHLY_PRICE_ID:      ${PADDLE_MONTHLY_PRICE_ID:-placeholder}
+      PADDLE_YEARLY_PRICE_ID:       ${PADDLE_YEARLY_PRICE_ID:-placeholder}
+      PADDLE_TWO_YEAR_PRICE_ID:     ${PADDLE_TWO_YEAR_PRICE_ID:-placeholder}
+      # Coinbase Commerce
+      COINBASE_COMMERCE_API_KEY:    ${COINBASE_COMMERCE_API_KEY:-placeholder}
+      COINBASE_WEBHOOK_SECRET:      ${COINBASE_WEBHOOK_SECRET:-placeholder}
+      # SMTP
+      SMTP_HOST:   ${SMTP_HOST:-smtp.placeholder.com}
+      SMTP_PORT:   ${SMTP_PORT:-587}
+      SMTP_USER:   ${SMTP_USER:-noreply@example.com}
+      SMTP_PASS:   ${SMTP_PASS:-placeholder}
+      SMTP_FROM:   ${SMTP_FROM:-noreply@example.com}
+      # WireGuard
+      WIREGUARD_ENABLED:            ${WIREGUARD_ENABLED:-false}
+      WIREGUARD_SERVER_PRIVATE_KEY: ${WIREGUARD_SERVER_PRIVATE_KEY:-placeholder_wg_key}
+      WIREGUARD_SUBNET:             ${WIREGUARD_SUBNET:-10.8.0.0/24}
+      WIREGUARD_PORT:               ${WIREGUARD_PORT:-51820}
+      SERVER_PUBLIC_IP:             ${SERVER_PUBLIC_IP:-167.172.96.225}
+      # Support
+      WHATSAPP_SUPPORT_NUMBER:      ${WHATSAPP_SUPPORT_NUMBER:-+905368895622}
+      # Misc
+      ENABLE_SELF_HEALING:          ${ENABLE_SELF_HEALING:-false}
+      AUTO_REFRESH_INTERVAL_MS:     ${AUTO_REFRESH_INTERVAL_MS:-30000}
+      MAX_RECONNECT_ATTEMPTS:       ${MAX_RECONNECT_ATTEMPTS:-5}
+      DOWNLOADS_DIR:                /app/downloads
+      IOS_APP_STORE_URL:            ${IOS_APP_STORE_URL:-https://apps.apple.com/app/geminivpn}
+      DEMO_DURATION_MINUTES:        ${DEMO_DURATION_MINUTES:-60}
+      BCRYPT_ROUNDS:                ${BCRYPT_ROUNDS:-12}
+      TRIAL_DURATION_DAYS:          ${TRIAL_DURATION_DAYS:-3}
+      RATE_LIMIT_WINDOW_MS:         ${RATE_LIMIT_WINDOW_MS:-900000}
+      RATE_LIMIT_MAX_REQUESTS:      ${RATE_LIMIT_MAX_REQUESTS:-100}
+    volumes:
+      # SQLite database persisted on host
+      - ../database:/app/database
+      # WireGuard configs
+      - wireguard_configs:/app/wireguard-configs
+      # Downloads served by nginx
+      - /var/www/geminivpn/downloads:/app/downloads:ro
+      # Log output
+      - /var/log/geminivpn:/var/log/geminivpn
+    networks:
+      - geminivpn-network
+    # Explicit DNS: prevents Docker container DNS failures that cause No-IP
+    # lookups to fail and backend-to-internet requests to time out.
+    # Uses Cloudflare (1.1.1.1) + Google (8.8.8.8) as fallbacks.
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+      - 1.0.0.1
+    ports:
+      - "51820:51820/udp"
+    cap_add:
+      - NET_ADMIN
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 5
+
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: geminivpn-nginx
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_started
+    entrypoint: ["/bin/sh", "/etc/nginx/pre-start.sh"]
+    ports:
+      - "0.0.0.0:80:80"
+      - "0.0.0.0:443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/pre-start.sh:/etc/nginx/pre-start.sh:ro
+      - /var/www/geminivpn:/var/www/geminivpn
+      - /opt/geminivpn/frontend/public:/var/www/geminivpn-src:ro
+      - /etc/letsencrypt:/etc/letsencrypt
+      - /var/www/certbot:/var/www/certbot:ro
+      - nginx_ssl:/etc/nginx/ssl
+      - nginx_logs:/var/log/nginx
+    networks:
+      - geminivpn-network
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+      - 1.0.0.1
+    healthcheck:
+      test: ["CMD", "curl", "-fk", "https://localhost/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+      retries: 5
+
+networks:
+  geminivpn-network:
+    driver: bridge
+
+volumes:
+  wireguard_configs:
+  nginx_logs:
+  nginx_ssl:

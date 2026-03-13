@@ -1,0 +1,97 @@
+# =============================================================================
+# GeminiVPN Backend — Production Dockerfile (SQLite Edition)
+# =============================================================================
+
+FROM node:20-alpine AS base
+RUN apk add --no-cache \
+    wireguard-tools iptables ip6tables \
+    curl bash openssl \
+    sqlite \
+    python3 make g++
+WORKDIR /app
+
+# ── Builder: compile TypeScript ───────────────────────────────────────────────
+FROM base AS builder
+
+COPY backend/package.json ./
+RUN npm install --legacy-peer-deps --no-audit --no-fund
+
+COPY backend/ ./
+COPY backend/prisma ./prisma/
+
+# ── Pre-flight: SQLite forbids ALL enum blocks (Prisma P1012) ─────────────────
+# Catches both single-line and multi-line enum { } declarations before
+# prisma generate wastes time and produces a cryptic error.
+RUN node -e "\
+const fs = require('fs');\
+const src = fs.readFileSync('prisma/schema.prisma', 'utf8');\
+const match = src.match(/^\\s*enum\\s+\\w+\\s*\\{/m);\
+if (match) {\
+  console.error('FATAL P1012: enum block found in SQLite schema — SQLite does not support Prisma enums.');\
+  console.error('Convert all enum fields to String in schema.prisma and use src/lib/enums.ts for constants.');\
+  process.exit(1);\
+}\
+console.log('  [✓] schema.prisma: no enum blocks (SQLite-safe)');\
+"
+
+# Generate Prisma client for SQLite
+RUN npx prisma@5.22.0 generate || (echo "FATAL: prisma generate failed" && exit 1)
+
+# Compile TypeScript — emit even on type errors (noEmitOnError is false by default)
+# but fail hard if the compiler cannot find/import a module (TS2307 = real bug).
+RUN npm install -g typescript@5.3.3 --quiet
+RUN node_modules/.bin/tsc --skipLibCheck 2>&1 | tee /tmp/tsc.log; \
+    grep -E "error TS2307|error TS2305|error TS2304|Cannot find module|has no exported member" /tmp/tsc.log && \
+    echo "FATAL: TypeScript import/module errors — fix the source before deploying" && exit 1; \
+    echo "  [✓] TypeScript compiled (type warnings are non-fatal)"
+
+# Compile seed.ts — use transpileOnly fallback so seed always produces a .js
+COPY backend/tsconfig.seed.json ./tsconfig.seed.json
+RUN mkdir -p dist/prisma && \
+    ( node_modules/.bin/tsc -p tsconfig.seed.json --skipLibCheck 2>&1 || \
+      node -e "var ts=require('typescript'),fs=require('fs'); \
+               var src=fs.readFileSync('prisma/seed.ts','utf8'); \
+               var out=ts.transpileModule(src,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020,esModuleInterop:true}}); \
+               fs.writeFileSync('dist/prisma/seed.js',out.outputText); \
+               console.log('  [✓] seed.ts transpiled via fallback');" \
+    ) || true
+
+# Hard gate — if server.js is absent the container would crash at boot anyway
+RUN test -f dist/server.js   || (echo "FATAL: dist/server.js missing — TypeScript compilation failed"        && exit 1)
+RUN test -f dist/lib/prisma.js || (echo "FATAL: dist/lib/prisma.js missing — Prisma singleton not compiled" && exit 1)
+RUN echo "  [✓] Build artefacts verified: dist/server.js + dist/lib/prisma.js present"
+
+# ── Production stage ──────────────────────────────────────────────────────────
+FROM base AS production
+
+RUN addgroup -g 1001 -S nodejs && adduser -S nodejs -u 1001
+
+COPY backend/package.json ./
+RUN npm install --omit=dev --legacy-peer-deps --no-audit --no-fund
+
+COPY backend/prisma ./prisma/
+
+# Prisma client for SQLite in production stage
+RUN npx prisma@5.22.0 generate || (echo "FATAL: prisma generate failed (production stage)" && exit 1)
+
+# Copy compiled output from builder
+COPY --from=builder /app/dist ./dist
+
+# Copy seed to /app so external seed runs find node_modules properly
+COPY --from=builder /app/dist/prisma/seed.js ./seed.js
+
+# Create required directories
+# /app/database is mounted as a volume from the host — do NOT chown to prevent
+# permission issues when the host directory already exists.
+RUN mkdir -p /var/log/geminivpn /app/wireguard-configs /app/database && \
+    chown -R nodejs:nodejs /app/dist /app/prisma /app/node_modules /app/package.json \
+                            /var/log/geminivpn /app/wireguard-configs && \
+    chmod 777 /app/database
+
+USER nodejs
+EXPOSE 5000
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=5 \
+  CMD curl -f http://localhost:5000/health || exit 1
+
+CMD ["node", "dist/server.js"]

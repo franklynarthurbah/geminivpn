@@ -1,0 +1,189 @@
+// =============================================================================
+// GeminiVPN — Prisma Schema v5 (SQLite / File-Based Database)
+// Payment providers: Stripe · Square · Paddle · Coinbase Commerce
+// Database: SQLite stored in /app/database/geminivpn.db
+//
+// IMPORTANT — SQLite limitations addressed:
+//   * enum blocks REMOVED — SQLite connector (Prisma 5.x) does not support them.
+//     All enum fields are now String fields with documented allowed values.
+//   * @db.Text removed — all strings are TEXT in SQLite automatically.
+//   * String[] arrays replaced with String (JSON-encoded).
+//   * BigInt replaced with Int.
+//
+// Allowed string values are enforced in application code (see src/lib/enums.ts).
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// subscriptionStatus: "TRIAL" | "ACTIVE" | "EXPIRED" | "CANCELLED" | "SUSPENDED"
+// paymentProvider:    "STRIPE" | "SQUARE" | "PADDLE" | "COINBASE" | null
+
+model User {
+  id                   String    @id @default(uuid())
+  email                String    @unique
+  password             String
+  name                 String?
+  subscriptionStatus   String    @default("TRIAL")
+  trialEndsAt          DateTime?
+  subscriptionEndsAt   DateTime?
+  gracePeriodEndsAt    DateTime?
+  stripeCustomerId     String?   @unique
+  stripeSubscriptionId String?   @unique
+  paymentCustomerId    String?   @unique
+  paddleSubscriptionId String?   @unique
+  paymentProvider      String?
+  isActive             Boolean   @default(true)
+  isTestUser           Boolean   @default(false)
+  emailVerified        Boolean   @default(false)
+  lastLoginAt          DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  vpnClients     VPNClient[]
+  payments       Payment[]
+  sessions       Session[]
+  connectionLogs ConnectionLog[]
+  demoAccount    DemoAccount?
+}
+
+model VPNClient {
+  id              String     @id @default(uuid())
+  userId          String
+  user            User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name            String     @default("My Device")
+  publicKey       String     @unique
+  privateKey      String
+  assignedIp      String     @unique
+  serverId        String?
+  server          VPNServer? @relation(fields: [serverId], references: [id])
+  isConnected     Boolean    @default(false)
+  lastConnectedAt DateTime?
+  dataTransferred Int        @default(0)
+  configFile      String?
+  qrCodeData      String?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+}
+
+model VPNServer {
+  id             String      @id @default(uuid())
+  name           String
+  country        String
+  city           String
+  region         String?
+  hostname       String      @unique
+  port           Int         @default(51820)
+  publicKey      String      @unique
+  loadPercentage Int         @default(0)
+  latencyMs      Int         @default(0)
+  maxClients     Int         @default(200)
+  dnsServers     String      @default("1.1.1.1,1.0.0.1")
+  isActive       Boolean     @default(true)
+  isMaintenance  Boolean     @default(false)
+  subnet         String      @default("10.8.0.0/24")
+  tags           String      @default("[]")
+  clients        VPNClient[]
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+}
+
+// provider: "STRIPE" | "SQUARE" | "PADDLE" | "COINBASE" | null
+// status:   "PENDING" | "COMPLETED" | "FAILED" | "REFUNDED"
+// planType: "MONTHLY" | "YEARLY" | "TWO_YEAR"
+
+model Payment {
+  id                String   @id @default(uuid())
+  userId            String
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  stripePaymentId   String?  @unique
+  providerPaymentId String?  @unique
+  provider          String?
+  amount            Int
+  currency          String   @default("usd")
+  status            String   @default("PENDING")
+  planType          String
+  metadata          String?
+  createdAt         DateTime @default(now())
+
+  @@index([userId])
+  @@index([provider])
+  @@index([status])
+}
+
+model Session {
+  id           String    @id @default(uuid())
+  userId       String
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  refreshToken String    @unique
+  ipAddress    String?
+  userAgent    String?
+  isValid      Boolean   @default(true)
+  revokedAt    DateTime?
+  lastUsedAt   DateTime?
+  expiresAt    DateTime
+  createdAt    DateTime  @default(now())
+}
+
+model ConnectionLog {
+  id              String   @id @default(uuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  clientId        String?
+  eventType       String
+  serverId        String?
+  assignedIp      String?
+  clientIp        String?
+  duration        Int?
+  dataTransferred Int?
+  createdAt       DateTime @default(now())
+}
+
+model DemoAccount {
+  id              String    @id @default(cuid())
+  userId          String    @unique
+  user            User      @relation(fields: [userId], references: [id])
+  username        String    @unique
+  creatorIp       String
+  expiresAt       DateTime
+  maxClients      Int       @default(1)
+  bandwidthMbps   Int       @default(10)
+  allowedServers  String    @default("us-ny,eu-london")
+  convertedToPaid Boolean   @default(false)
+  conversionDate  DateTime?
+  warningSent     Boolean   @default(false)
+  isDeleted       Boolean   @default(false)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([creatorIp])
+  @@index([expiresAt])
+  @@index([isDeleted])
+}
+
+model DownloadLog {
+  id        String   @id @default(uuid())
+  platform  String
+  version   String   @default("latest")
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  @@index([platform])
+  @@index([createdAt])
+}
+
+model SystemConfig {
+  id          String   @id @default(uuid())
+  key         String   @unique
+  value       String
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
